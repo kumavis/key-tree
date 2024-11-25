@@ -1,4 +1,3 @@
-import { mnemonicToEntropy } from '@metamask/scure-bip39';
 import { wordlist as englishWordlist } from '@metamask/scure-bip39/dist/wordlists/english';
 import { assert, stringToBytes } from '@metamask/utils';
 
@@ -6,7 +5,7 @@ import type { DeriveChildKeyArgs } from '.';
 import type { BIP39StringNode } from '../constants';
 import { BYTES_KEY_LENGTH } from '../constants';
 import type { CryptographicFunctions } from '../cryptography';
-import { hmacSha512, pbkdf2Sha512 } from '../cryptography';
+import { sha256, hmacSha512, pbkdf2Sha512 } from '../cryptography';
 import type { Curve } from '../curves';
 import { SLIP10Node } from '../SLIP10Node';
 import { getFingerprint } from '../utils';
@@ -37,21 +36,21 @@ function validateMnemonicPhrase(mnemonicPhrase: string) {
 }
 
 /**
- * Encode a BIP-39 mnemonic phrase to a `Uint8Array` for use in seed generation.
- * If the mnemonic is already a `Uint8Array`, it is assumed to contain the
- * indices of the words in the wordlist.
+ * Get the mnemonic phrase from a mnemonic phrase or a `Uint8Array` of indices.
+ * If the mnemonic is a `Uint8Array`, it is assumed to contain the indices of
+ * the words in the wordlist.
  *
- * @param mnemonic - The mnemonic phrase to encode.
+ * @param mnemonic - The mnemonic phrase or indices.
  * @param wordlist - The wordlist to use.
- * @returns The encoded mnemonic phrase.
+ * @returns The mnemonic phrase.
  */
-function encodeMnemonicPhrase(
+function getMnemonicPhrase(
   mnemonic: string | Uint8Array,
   wordlist: string[],
-) {
+): string {
   if (typeof mnemonic === 'string') {
     validateMnemonicPhrase(mnemonic);
-    return stringToBytes(mnemonic.normalize('NFKD'));
+    return mnemonic;
   }
 
   const mnemonicString = Array.from(new Uint16Array(mnemonic.buffer))
@@ -59,7 +58,8 @@ function encodeMnemonicPhrase(
     .join(' ');
 
   validateMnemonicPhrase(mnemonicString);
-  return stringToBytes(mnemonicString);
+
+  return mnemonicString;
 }
 
 /**
@@ -78,13 +78,109 @@ export async function mnemonicToSeed(
   cryptographicFunctions?: CryptographicFunctions,
 ) {
   const salt = `mnemonic${passphrase}`.normalize('NFKD');
+  const mnemonicString = getMnemonicPhrase(mnemonic, englishWordlist);
+
   return await pbkdf2Sha512(
-    encodeMnemonicPhrase(mnemonic, englishWordlist),
+    stringToBytes(mnemonicString),
     stringToBytes(salt),
     2048,
     64,
     cryptographicFunctions,
   );
+}
+
+/**
+ * Convert a `Uint8Array` of bytes to an array of bits.
+ *
+ * @param bytes - The `Uint8Array` to convert.
+ * @returns The array of bits.
+ */
+function bytesToBits(bytes: Uint8Array): number[] {
+  const bits: number[] = [];
+  for (const byte of bytes) {
+    for (let i = 7; i >= 0; i--) {
+      // eslint-disable-next-line no-bitwise
+      bits.push((byte >> i) & 1);
+    }
+  }
+
+  return bits;
+}
+
+/**
+ * Convert an array of bits to a `Uint8Array`.
+ *
+ * @param bits - The array of bits.
+ * @returns The `Uint8Array`.
+ */
+export function bitsToBytes(bits: number[]): Uint8Array {
+  if (bits.length % 8 !== 0) {
+    throw new Error('The number of bits must be a multiple of 8.');
+  }
+
+  const bytes = new Uint8Array(bits.length / 8);
+
+  for (let i = 0; i < bits.length; i += 8) {
+    let byte = 0;
+    for (let j = 0; j < 8; j++) {
+      const value = bits[i + j];
+      assert(value === 0 || value === 1, 'Invalid bit value.');
+
+      // eslint-disable-next-line no-bitwise
+      byte |= value << (7 - j);
+    }
+    bytes[i / 8] = byte;
+  }
+
+  return bytes;
+}
+
+/**
+ * Get the checksum for the entropy.
+ *
+ * @param entropy - The entropy.
+ * @returns The checksum as an array of bits.
+ */
+function getChecksum(entropy: Uint8Array): number[] {
+  const hash = sha256(entropy);
+  return bytesToBits(hash).slice(0, entropy.length / 4);
+}
+
+/**
+ * Convert a BIP-39 mnemonic phrase to entropy.
+ *
+ * @param mnemonic - The BIP-39 mnemonic phrase to convert.
+ * @returns The entropy.
+ */
+export async function mnemonicToEntropy(
+  mnemonic: string | Uint8Array,
+): Promise<Uint8Array> {
+  const words = getMnemonicPhrase(mnemonic, englishWordlist).split(' ');
+  const bits = words.flatMap((word) => {
+    const index = englishWordlist.indexOf(word);
+    const binaryBits = [];
+
+    for (let i = 10; i >= 0; i--) {
+      // eslint-disable-next-line no-bitwise
+      binaryBits.push((index >> i) & 1);
+    }
+
+    return binaryBits;
+  });
+
+  const checksumLength = bits.length % 32;
+  const entropy = bits.slice(0, -checksumLength);
+  const checksum = bits.slice(-checksumLength);
+
+  const newChecksum = getChecksum(bitsToBytes(entropy));
+
+  assert(
+    checksum.length === newChecksum.length &&
+      checksum.every((bit, index) => bit === newChecksum[index]),
+    'Invalid checksum: The checksum does not match the entropy.',
+  );
+
+  return bitsToBytes(entropy);
 }
 
 /**
@@ -120,7 +216,7 @@ export async function deriveChildKey(
       );
     case 'cip3':
       return entropyToCip3MasterNode(
-        mnemonicToEntropy(path, englishWordlist),
+        await mnemonicToEntropy(path),
         curve,
         cryptographicFunctions,
       );

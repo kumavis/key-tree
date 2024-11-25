@@ -1,6 +1,7 @@
 import {
   assert,
   bigIntToBytes,
+  bytesToHex,
   concatBytes,
   hexToBytes,
 } from '@metamask/utils';
@@ -14,6 +15,7 @@ import {
   createBip39KeyFromSeed,
   deriveChildKey,
   mnemonicToSeed,
+  mnemonicToEntropy,
 } from './bip39';
 
 const TEST_MNEMONIC_PHRASE =
@@ -80,6 +82,13 @@ describe('mnemonicToSeed', () => {
       const generatedSeed = await mnemonicToSeed(mnemonic, passphrase);
       expect(generatedSeed).toStrictEqual(seed);
     });
+  });
+});
+
+describe('mnemonicToEntropy', () => {
+  it('converts a mnemonic phrase to entropy', async () => {
+    const entropy = await mnemonicToEntropy(TEST_MNEMONIC_PHRASE);
+    expect(bytesToHex(entropy)).toBe('0xa4cbb132b7875ee9ae52ffc31b0e2c56');
   });
 });
 

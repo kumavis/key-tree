@@ -1,9 +1,8 @@
-import { mnemonicToSeed } from '@metamask/scure-bip39';
-import { wordlist } from '@metamask/scure-bip39/dist/wordlists/english';
 import { hexToBytes, stringToBytes } from '@metamask/utils';
 
 import fixtures from '../test/fixtures';
 import { BIP44Node } from './BIP44Node';
+import { mnemonicToSeed } from './derivers';
 import {
   getBIP32NodeToken,
   getBIP44ChangePathString,
@@ -425,8 +424,8 @@ describe('mnemonicPhraseToBytes', () => {
     'converts a mnemonic phrase to a Uint8Array',
     async (mnemonicPhrase) => {
       const array = mnemonicPhraseToBytes(mnemonicPhrase);
-      expect(await mnemonicToSeed(array, wordlist)).toStrictEqual(
-        await mnemonicToSeed(mnemonicPhrase, wordlist),
+      expect(await mnemonicToSeed(array)).toStrictEqual(
+        await mnemonicToSeed(mnemonicPhrase),
       );
     },
   );
